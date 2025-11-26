@@ -56,14 +56,35 @@ index 4ce8c6d..e380e33 100644
  	if (am_server)
  		set_allow_inc_recurse();
 diff --git a/flist.c b/flist.c
-index 1783253..edfd943 100644
+index 1783253..c6a81de 100644
 --- a/flist.c
 +++ b/flist.c
-@@ -500,6 +500,11 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -48,6 +48,10 @@ extern int preserve_uid;
+ extern int preserve_gid;
+ extern int preserve_acls;
+ extern int preserve_xattrs;
++#ifdef __MVS__
++extern int preserve_zos_tags;
++extern int zos_default_ccsid;
++#endif
+ extern int preserve_links;
+ extern int preserve_hard_links;
+ extern int preserve_devices;
+@@ -57,6 +61,9 @@ extern int missing_args;
+ extern int eol_nulls;
+ extern int atimes_ndx;
+ extern int crtimes_ndx;
++#ifdef __MVS__
++extern int zos_tags_ndx;
++#endif
+ extern int relative_paths;
+ extern int implied_dirs;
+ extern int ignore_perishable;
+@@ -500,6 +507,11 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  	}
  #endif
  
-+#ifdef __MVS__DISABLED
++#ifdef __MVS__
 +	if (preserve_zos_tags && S_ISREG(mode))
 +		xflags |= XMIT_ZOS_TAGS;
 +#endif
@@ -71,11 +92,11 @@ index 1783253..edfd943 100644
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != -1) {
  		if (protocol_version >= 30) {
-@@ -659,6 +664,13 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -659,6 +671,13 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  	}
  #endif
  
-+#ifdef __MVS__DISABLED
++#ifdef __MVS__
 +	if (xflags & XMIT_ZOS_TAGS) {
 +		write_varint(f, F_ZOS_CCSID(file));
 +		write_varint(f, F_ZOS_TXTFLAG(file));
@@ -85,7 +106,7 @@ index 1783253..edfd943 100644
  	if (always_checksum && (S_ISREG(mode) || protocol_version < 28)) {
  		const char *sum;
  		if (S_ISREG(mode))
-@@ -694,6 +706,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -694,6 +713,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  	static uid_t uid;
  	static gid_t gid;
  	static uint16 gid_flags;
@@ -96,11 +117,11 @@ index 1783253..edfd943 100644
  	static char lastname[MAXPATHLEN], *lastdir;
  	static int lastdir_depth, lastdir_len = -1;
  	static unsigned int del_hier_name_len = 0;
-@@ -946,6 +962,21 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -946,6 +969,21 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  #endif
  		linkname_len = 0;
  
-+#ifdef __MVS__DISABLED
++#ifdef __MVS__
 +	/* Read z/OS tags if present */
 +	if (xflags & XMIT_ZOS_TAGS) {
 +		zos_ccsid = read_varint(f);
@@ -118,11 +139,11 @@ index 1783253..edfd943 100644
  	if (copy_devices && IS_DEVICE(mode)) {
  		/* This is impossible in the official release, but some pre-release patches
  		 * didn't convert the device into a file before sending, so we'll do it here
-@@ -1071,6 +1102,12 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -1071,6 +1109,12 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  #endif
  	if (unsort_ndx)
  		F_NDX(file) = flist->used + flist->ndx_start;
-+#ifdef __MVS__DISABLED
++#ifdef __MVS__
 +	if (zos_tags_ndx && S_ISREG(mode)) {
 +		F_ZOS_CCSID(file) = zos_ccsid;
 +		F_ZOS_TXTFLAG(file) = zos_txtflag;
@@ -131,11 +152,11 @@ index 1783253..edfd943 100644
  
  	if (basename != thisname) {
  		file->dirname = lastdir;
-@@ -1482,6 +1519,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1482,6 +1526,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  	if (crtimes_ndx)
  		F_CRTIME(file) = get_create_time(fname, &st);
  #endif
-+#ifdef __MVS__DISABLED
++#ifdef __MVS__
 +	if (zos_tags_ndx && S_ISREG(st.st_mode)) {
 +		F_ZOS_CCSID(file) = st.st_tag.ft_ccsid;
 +		F_ZOS_TXTFLAG(file) = st.st_tag.ft_txtflag;
@@ -156,7 +177,7 @@ index bd2e927..49e4309 100644
 +    system("touch proto.h-tstamp && chtag -tcISO8859-1 proto.h-tstamp")
  }
 diff --git a/options.c b/options.c
-index 578507c..aa00a3c 100644
+index 578507c..4b7b447 100644
 --- a/options.c
 +++ b/options.c
 @@ -57,6 +57,10 @@ int preserve_acls = 0;
@@ -164,7 +185,7 @@ index 578507c..aa00a3c 100644
  int preserve_perms = 0;
  int preserve_executability = 0;
 +#ifdef __MVS__
-+int preserve_zos_tags = 0;
++int preserve_zos_tags = 1;  /* Enabled by default on z/OS */
 +int zos_default_ccsid = 819; /* ISO8859-1/ASCII by default */
 +#endif
  int preserve_devices = 0;
@@ -224,7 +245,7 @@ index 49fc9f6..83b7531 100644
  #include "findme.h"
  
 diff --git a/rsync.c b/rsync.c
-index b130aba..b598f2a 100644
+index b130aba..6a4680c 100644
 --- a/rsync.c
 +++ b/rsync.c
 @@ -26,11 +26,18 @@
@@ -246,7 +267,7 @@ index b130aba..b598f2a 100644
  extern int preserve_executability;
  extern int preserve_mtimes;
  extern int omit_dir_times;
-@@ -669,6 +676,32 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -669,12 +676,54 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  	}
  #endif
  
@@ -279,6 +300,28 @@ index b130aba..b598f2a 100644
  	if (INFO_GTE(NAME, 2) && flags & ATTRS_REPORT) {
  		if (updated)
  			rprintf(FCLIENT, "%s\n", fname);
+ 		else
+ 			rprintf(FCLIENT, "%s is uptodate\n", fname);
+ 	}
++
++#ifdef __MVS__
++	/* Set z/OS file tags if enabled and file is regular */
++	if (zos_tags_ndx && S_ISREG(new_mode)) {
++		attrib_t attr;
++		memset(&attr, 0, sizeof(attr));
++		attr.att_filetagchg = 1;
++		attr.att_filetag.ft_ccsid = F_ZOS_CCSID(file);
++		attr.att_filetag.ft_txtflag = F_ZOS_TXTFLAG(file);
++
++		if (__chattr(fname, &attr, sizeof(attr)) != 0) {
++			rsyserr(FERROR_XFER, errno, "failed to set file tags on %s", full_fname(fname));
++		}
++	}
++#endif
++
+   cleanup:
+ 	if (sxp == &sx2)
+ 		free_stat_x(&sx2);
 diff --git a/rsync.h b/rsync.h
 index 479ac48..2ac634e 100644
 --- a/rsync.h
