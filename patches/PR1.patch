@@ -21,7 +21,7 @@ index 7c75c26..6413224 100644
  T_UNSAFE_OBJ = t_unsafe.o syscall.o util1.o util2.o t_stub.o lib/compat.o lib/snprintf.o lib/wildmatch.o
  t_unsafe$(EXEEXT): $(T_UNSAFE_OBJ)
 diff --git a/compat.c b/compat.c
-index 4ce8c6d..e380e33 100644
+index 4ce8c6d..85b1a3f 100644
 --- a/compat.c
 +++ b/compat.c
 @@ -47,6 +47,9 @@ extern int preserve_atimes;
@@ -55,6 +55,47 @@ index 4ce8c6d..e380e33 100644
  
  	if (am_server)
  		set_allow_inc_recurse();
+@@ -599,9 +609,39 @@ void setup_protocol(int f_out,int f_in)
+ 	if (remote_protocol == 0) {
+ 		if (am_server && !local_server)
+ 			check_sub_protocol();
+-		if (!read_batch)
++		if (!read_batch) {
++#ifdef __MVS__
++			write_int(f_out, protocol_version | PROTOCOL_ZOS_TAGS);
++#else
+ 			write_int(f_out, protocol_version);
++#endif
++		}
+ 		remote_protocol = read_int(f_in);
++#ifdef __MVS__
++		if (remote_protocol & PROTOCOL_ZOS_TAGS) {
++			remote_protocol &= ~PROTOCOL_ZOS_TAGS;
++			if (preserve_zos_tags == 2)
++				preserve_zos_tags = 1;
++		} else {
++			if (preserve_zos_tags == 2) {
++				preserve_zos_tags = 0;
++				/* Back out the slots reserved for z/OS tags since they won't be used.
++				 * This assumes zos_tags_ndx was the last thing added to file_extra_cnt. */
++				if (zos_tags_ndx) {
++					file_extra_cnt -= 2;
++					zos_tags_ndx = 0;
++				}
++			} else if (preserve_zos_tags == 1) {
++				rprintf(FWARNING, "Remote does not support z/OS tags. Tags will not be preserved.\n");
++				preserve_zos_tags = 0;
++				/* Back out the slots reserved for z/OS tags. */
++				if (zos_tags_ndx) {
++					file_extra_cnt -= 2;
++					zos_tags_ndx = 0;
++				}
++			}
++		}
++#endif
+ 		if (protocol_version > remote_protocol)
+ 			protocol_version = remote_protocol;
+ 	}
 diff --git a/flist.c b/flist.c
 index 1783253..6441b5f 100644
 --- a/flist.c
@@ -181,7 +222,7 @@ index bd2e927..49e4309 100644
 +    system("touch proto.h-tstamp && chtag -tcISO8859-1 proto.h-tstamp")
  }
 diff --git a/options.c b/options.c
-index 578507c..4b7b447 100644
+index 578507c..214ed6d 100644
 --- a/options.c
 +++ b/options.c
 @@ -57,6 +57,10 @@ int preserve_acls = 0;
@@ -189,7 +230,7 @@ index 578507c..4b7b447 100644
  int preserve_perms = 0;
  int preserve_executability = 0;
 +#ifdef __MVS__
-+int preserve_zos_tags = 1;  /* Enabled by default on z/OS */
++int preserve_zos_tags = 2;  /* Auto-detect by default on z/OS */
 +int zos_default_ccsid = 819; /* ISO8859-1/ASCII by default */
 +#endif
  int preserve_devices = 0;
@@ -327,18 +368,28 @@ index b130aba..6a4680c 100644
  	if (sxp == &sx2)
  		free_stat_x(&sx2);
 diff --git a/rsync.h b/rsync.h
-index 479ac48..3065fc5 100644
+index 479ac48..e888234 100644
 --- a/rsync.h
 +++ b/rsync.h
-@@ -71,6 +71,7 @@
+@@ -69,8 +69,15 @@
  
- #define XMIT_RESERVED_16 (1<<16) 	/* reserved for future fileflags use */
- #define XMIT_CRTIME_EQ_MTIME (1<<17)	/* any protocol - restricted by command-line option */
-+#define XMIT_ZOS_TAGS (1<<18)		/* z/OS file tag attributes (CCSID, txtflag) */
+ /* The following XMIT flags require an rsync that uses a varint for the flag values */
+ 
+-#define XMIT_RESERVED_16 (1<<16) 	/* reserved for future fileflags use */
+-#define XMIT_CRTIME_EQ_MTIME (1<<17)	/* any protocol - restricted by command-line option */
++#define XMIT_RESERVED_16 (1<<16)       /* reserved for future fileflags use */
++
++#define XMIT_CRTIME_EQ_MTIME (1<<17)   /* any protocol - restricted by command-line option */
++
++#define XMIT_ZOS_TAGS (1<<18)          /* z/OS file tag attributes (CCSID, txtflag) */
++
++
++
++#define PROTOCOL_ZOS_TAGS (1<<30)      /* Capability flag for z/OS tags in protocol version */
  
  /* These flags are used in the live flist data. */
  
-@@ -317,6 +318,8 @@ enum delret {
+@@ -317,6 +324,8 @@ enum delret {
  #include "config.h"
  
  /* The default RSYNC_RSH is always set in config.h. */
@@ -347,7 +398,7 @@ index 479ac48..3065fc5 100644
  
  #include <stdio.h>
  #ifdef HAVE_SYS_TYPES_H
-@@ -444,6 +447,13 @@ enum delret {
+@@ -444,6 +453,13 @@ enum delret {
  #endif
  #endif
  
@@ -361,7 +412,7 @@ index 479ac48..3065fc5 100644
  /* these are needed for the uid/gid mapping code */
  #include <pwd.h>
  #include <grp.h>
-@@ -459,6 +469,8 @@ enum delret {
+@@ -459,6 +475,8 @@ enum delret {
  #include <sys/file.h>
  #endif
  
@@ -370,7 +421,7 @@ index 479ac48..3065fc5 100644
  #ifdef HAVE_DIRENT_H
  # include <dirent.h>
  #else
-@@ -483,6 +495,13 @@ enum delret {
+@@ -483,6 +501,13 @@ enum delret {
  #include <sys/sysmacros.h>
  #endif
  
@@ -384,7 +435,7 @@ index 479ac48..3065fc5 100644
  #ifdef MAKEDEV_TAKES_3_ARGS
  #define MAKEDEV(devmajor,devminor) makedev(0,devmajor,devminor)
  #else
-@@ -821,6 +840,9 @@ extern int uid_ndx;
+@@ -821,6 +846,9 @@ extern int uid_ndx;
  extern int gid_ndx;
  extern int acls_ndx;
  extern int xattrs_ndx;
@@ -394,7 +445,7 @@ index 479ac48..3065fc5 100644
  extern int file_sum_extra_cnt;
  
  #ifdef USE_FLEXIBLE_ARRAY
-@@ -877,6 +899,10 @@ extern int file_sum_extra_cnt;
+@@ -877,6 +905,10 @@ extern int file_sum_extra_cnt;
  #define F_ACL(f) REQ_EXTRA(f, acls_ndx)->num
  #define F_XATTR(f) REQ_EXTRA(f, xattrs_ndx)->num
  #define F_NDX(f) REQ_EXTRA(f, unsort_ndx)->num
@@ -405,7 +456,7 @@ index 479ac48..3065fc5 100644
  #define F_ATIME(f) REQ_EXTRA64(f, atimes_ndx)->num
  #define F_CRTIME(f) REQ_EXTRA64(f, crtimes_ndx)->num
  
-@@ -1143,6 +1169,10 @@ typedef struct {
+@@ -1143,6 +1175,10 @@ typedef struct {
  #ifdef SUPPORT_XATTRS
      item_list *xattr;
  #endif
@@ -416,7 +467,7 @@ index 479ac48..3065fc5 100644
  } stat_x;
  
  #define ACL_READY(sx) ((sx).acc_acl != NULL)
-@@ -1316,6 +1346,32 @@ extern int errno;
+@@ -1316,6 +1352,32 @@ extern int errno;
  #define S_ISREG(mode) (((mode) & (_S_IFMT)) == (_S_IFREG))
  #endif
  
@@ -450,7 +501,7 @@ index 479ac48..3065fc5 100644
  #ifdef O_NONBLOCK
  # define NONBLOCK_FLAG O_NONBLOCK
 diff --git a/syscall.c b/syscall.c
-index 34a9bba..725201c 100644
+index 34a9bba..c4d2694 100644
 --- a/syscall.c
 +++ b/syscall.c
 @@ -81,6 +81,76 @@ struct create_time {
@@ -488,8 +539,8 @@ index 34a9bba..725201c 100644
 +{
 +  mode_t outmode = (mode_t) (inmode & 0777);
 +
-+  rprintf(FINFO, "[DEBUG to_linux_mode] inmode=0x%08x, inmode&ZOS_S_IFMT=0x%08x, ZOS_S_IFREG=0x%08x\n",
-+          inmode, inmode & ZOS_S_IFMT, ZOS_S_IFREG);
++  //rprintf(FINFO, "[DEBUG to_linux_mode] inmode=0x%08x, inmode&ZOS_S_IFMT=0x%08x, ZOS_S_IFREG=0x%08x\n",
++    //      inmode, inmode & ZOS_S_IFMT, ZOS_S_IFREG);
 +
 +  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFIFO) { outmode |= LINUX_S_IFIFO; }
 +  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFCHR) { outmode |= LINUX_S_IFCHR; }
@@ -497,12 +548,12 @@ index 34a9bba..725201c 100644
 +  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFBLK) { outmode |= LINUX_S_IFBLK; }
 +  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFREG) {
 +    outmode |= LINUX_S_IFREG;
-+    rprintf(FINFO, "[DEBUG to_linux_mode] MATCHED S_IFREG, outmode=0%o\n", outmode);
++    //rprintf(FINFO, "[DEBUG to_linux_mode] MATCHED S_IFREG, outmode=0%o\n", outmode);
 +  }
 +  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFLNK) { outmode |= LINUX_S_IFLNK; }
 +  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFSOCK) { outmode |= LINUX_S_IFSOCK; }
 +
-+  rprintf(FINFO, "[DEBUG to_linux_mode] final outmode=0%o\n", outmode);
++  //rprintf(FINFO, "[DEBUG to_linux_mode] final outmode=0%o\n", outmode);
 +  return outmode;
 +}
 +
