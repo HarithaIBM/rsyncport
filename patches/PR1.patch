@@ -327,7 +327,7 @@ index b130aba..6a4680c 100644
  	if (sxp == &sx2)
  		free_stat_x(&sx2);
 diff --git a/rsync.h b/rsync.h
-index 479ac48..7bf4609 100644
+index 479ac48..3065fc5 100644
 --- a/rsync.h
 +++ b/rsync.h
 @@ -71,6 +71,7 @@
@@ -416,7 +416,7 @@ index 479ac48..7bf4609 100644
  } stat_x;
  
  #define ACL_READY(sx) ((sx).acc_acl != NULL)
-@@ -1316,6 +1346,12 @@ extern int errno;
+@@ -1316,6 +1346,32 @@ extern int errno;
  #define S_ISREG(mode) (((mode) & (_S_IFMT)) == (_S_IFREG))
  #endif
  
@@ -424,6 +424,26 @@ index 479ac48..7bf4609 100644
 +/* z/OS mode conversion functions */
 +mode_t to_linux_mode(unsigned int inmode);
 +unsigned int to_zos_mode(mode_t inmode);
++
++/*
++ * On z/OS, our do_stat/do_lstat/do_fstat functions convert st_mode to Linux format.
++ * Therefore, we need to redefine the S_IS* macros to work with Linux-format modes.
++ */
++#undef S_IFMT
++#undef S_IFREG
++#undef S_IFDIR
++#undef S_IFLNK
++#undef S_ISREG
++#undef S_ISDIR
++#undef S_ISLNK
++
++#define S_IFMT   0170000
++#define S_IFREG  0100000
++#define S_IFDIR  0040000
++#define S_IFLNK  0120000
++#define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
++#define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
++#define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
 +#endif
 +
  /* work out what fcntl flag to use for non-blocking */
