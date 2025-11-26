@@ -56,7 +56,7 @@ index 4ce8c6d..e380e33 100644
  	if (am_server)
  		set_allow_inc_recurse();
 diff --git a/flist.c b/flist.c
-index 1783253..44701f5 100644
+index 1783253..6441b5f 100644
 --- a/flist.c
 +++ b/flist.c
 @@ -48,6 +48,10 @@ extern int preserve_uid;
@@ -156,21 +156,7 @@ index 1783253..44701f5 100644
  
  	if (basename != thisname) {
  		file->dirname = lastdir;
-@@ -1469,7 +1517,13 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
- 		F_HIGH_LEN(file) = (uint32)(st.st_size >> 32);
- 	}
- #endif
-+#ifdef __MVS__
-+	rprintf(FINFO, "[DEBUG make_file] BEFORE conversion: st.st_mode=0x%08x\n", st.st_mode);
-+	file->mode = to_linux_mode(st.st_mode);
-+	rprintf(FINFO, "[DEBUG make_file] AFTER conversion: file->mode=0%o\n", file->mode);
-+#else
- 	file->mode = st.st_mode;
-+#endif
- 	if (preserve_uid)
- 		F_OWNER(file) = st.st_uid;
- 	if (preserve_gid)
-@@ -1482,6 +1536,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1482,6 +1530,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  	if (crtimes_ndx)
  		F_CRTIME(file) = get_create_time(fname, &st);
  #endif
