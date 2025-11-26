@@ -56,7 +56,7 @@ index 4ce8c6d..e380e33 100644
  	if (am_server)
  		set_allow_inc_recurse();
 diff --git a/flist.c b/flist.c
-index 1783253..6441b5f 100644
+index 1783253..f07c1a2 100644
 --- a/flist.c
 +++ b/flist.c
 @@ -48,6 +48,10 @@ extern int preserve_uid;
@@ -156,7 +156,19 @@ index 1783253..6441b5f 100644
  
  	if (basename != thisname) {
  		file->dirname = lastdir;
-@@ -1482,6 +1530,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1469,7 +1517,11 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+ 		F_HIGH_LEN(file) = (uint32)(st.st_size >> 32);
+ 	}
+ #endif
++#ifdef __MVS__
++	file->mode = to_linux_mode(st.st_mode);
++#else
+ 	file->mode = st.st_mode;
++#endif
+ 	if (preserve_uid)
+ 		F_OWNER(file) = st.st_uid;
+ 	if (preserve_gid)
+@@ -1482,6 +1534,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  	if (crtimes_ndx)
  		F_CRTIME(file) = get_create_time(fname, &st);
  #endif
@@ -327,7 +339,7 @@ index b130aba..6a4680c 100644
  	if (sxp == &sx2)
  		free_stat_x(&sx2);
 diff --git a/rsync.h b/rsync.h
-index 479ac48..2ac634e 100644
+index 479ac48..7bf4609 100644
 --- a/rsync.h
 +++ b/rsync.h
 @@ -71,6 +71,7 @@
@@ -416,8 +428,21 @@ index 479ac48..2ac634e 100644
  } stat_x;
  
  #define ACL_READY(sx) ((sx).acc_acl != NULL)
+@@ -1316,6 +1346,12 @@ extern int errno;
+ #define S_ISREG(mode) (((mode) & (_S_IFMT)) == (_S_IFREG))
+ #endif
+ 
++#ifdef __MVS__
++/* z/OS mode conversion functions */
++mode_t to_linux_mode(unsigned int inmode);
++unsigned int to_zos_mode(mode_t inmode);
++#endif
++
+ /* work out what fcntl flag to use for non-blocking */
+ #ifdef O_NONBLOCK
+ # define NONBLOCK_FLAG O_NONBLOCK
 diff --git a/syscall.c b/syscall.c
-index 34a9bba..fdd96cb 100644
+index 34a9bba..f5aa0b3 100644
 --- a/syscall.c
 +++ b/syscall.c
 @@ -81,6 +81,68 @@ struct create_time {
@@ -450,7 +475,7 @@ index 34a9bba..fdd96cb 100644
 + * the top word for the st_mode parts of mode and
 + * Linux uses the top nibble
 + */
-+static inline mode_t 
++mode_t
 +to_linux_mode(unsigned int inmode)
 +{
 +  mode_t outmode = (mode_t) (inmode & 0777);
@@ -465,7 +490,7 @@ index 34a9bba..fdd96cb 100644
 +  return outmode;
 +}
 +
-+static inline unsigned int
++unsigned int
 +to_zos_mode(mode_t inmode)
 +{
 +  unsigned int outmode = (unsigned int) (inmode & 0777);
