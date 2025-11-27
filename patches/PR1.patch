@@ -1,5 +1,5 @@
 diff --git i/Makefile.in w/Makefile.in
-index 7c75c26..6413224 100644
+index 7c75c26..f88fb8e 100644
 --- i/Makefile.in
 +++ w/Makefile.in
 @@ -53,7 +53,7 @@ popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
@@ -11,6 +11,15 @@ index 7c75c26..6413224 100644
  
  # Programs we must have to run the test cases
  CHECK_PROGS = rsync$(EXEEXT) tls$(EXEEXT) getgroups$(EXEEXT) getfsdev$(EXEEXT) \
+@@ -162,7 +162,7 @@ tls$(EXEEXT): $(TLS_OBJ)
+ 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TLS_OBJ) $(LIBS)
+ 
+ testrun$(EXEEXT): testrun.o
+-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ testrun.o
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ testrun.o $(LIBS)
+ 
+ getgroups$(EXEEXT): getgroups.o
+ 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ getgroups.o $(LIBS)
 @@ -172,7 +172,7 @@ getfsdev$(EXEEXT): getfsdev.o
  
  TRIMSLASH_OBJ = trimslash.o syscall.o util2.o t_stub.o lib/compat.o lib/snprintf.o
