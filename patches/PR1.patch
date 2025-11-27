@@ -432,7 +432,7 @@ index b130aba..6a4680c 100644
  	if (sxp == &sx2)
  		free_stat_x(&sx2);
 diff --git a/rsync.h b/rsync.h
-index 479ac48..caeeb33 100644
+index 479ac48..de5fdea 100644
 --- a/rsync.h
 +++ b/rsync.h
 @@ -69,8 +69,15 @@
@@ -457,8 +457,8 @@ index 479ac48..caeeb33 100644
  #define IOERR_VANISHED	(1<<1)
  #define IOERR_DEL_LIMIT (1<<2)
  
-+#define CF_ID0_NAMES (1<<7)
-+#define CF_ZOS_TAGS  (1<<8)    /* z/OS file tag support negotiation */
++#define CF_ID0_NAMES (1<<8)
++#define CF_ZOS_TAGS  (1<<29)    /* z/OS file tag support negotiation */
 +
  #define MAX_ARGS 1000
  #define MAX_BASIS_DIRS 20
