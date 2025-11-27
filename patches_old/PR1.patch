@@ -1,0 +1,590 @@
+diff --git a/Makefile.in b/Makefile.in
+index 7c75c26..6413224 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -53,7 +53,7 @@ popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
+ 	popt/popthelp.o popt/poptparse.o popt/poptint.o
+ OBJS=$(OBJS1) $(OBJS2) $(OBJS3) $(DAEMON_OBJ) $(LIBOBJ) @BUILD_ZLIB@ @BUILD_POPT@
+ 
+-TLS_OBJ = tls.o syscall.o util2.o t_stub.o lib/compat.o lib/snprintf.o lib/permstring.o lib/sysxattrs.o @BUILD_POPT@
++TLS_OBJ = tls.o syscall.o util2.o t_stub.o lib/compat.o lib/snprintf.o lib/permstring.o lib/sysxattrs.o $(OBJS)
+ 
+ # Programs we must have to run the test cases
+ CHECK_PROGS = rsync$(EXEEXT) tls$(EXEEXT) getgroups$(EXEEXT) getfsdev$(EXEEXT) \
+@@ -172,7 +172,7 @@ getfsdev$(EXEEXT): getfsdev.o
+ 
+ TRIMSLASH_OBJ = trimslash.o syscall.o util2.o t_stub.o lib/compat.o lib/snprintf.o
+ trimslash$(EXEEXT): $(TRIMSLASH_OBJ)
+-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TRIMSLASH_OBJ) $(LIBS)
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(TRIMSLASH_OBJ) $(LIBS)
+ 
+ T_UNSAFE_OBJ = t_unsafe.o syscall.o util1.o util2.o t_stub.o lib/compat.o lib/snprintf.o lib/wildmatch.o
+ t_unsafe$(EXEEXT): $(T_UNSAFE_OBJ)
+diff --git a/compat.c b/compat.c
+index 4ce8c6d..b218e15 100644
+--- a/compat.c
++++ b/compat.c
+@@ -47,6 +47,9 @@ extern int preserve_atimes;
+ extern int preserve_crtimes;
+ extern int preserve_acls;
+ extern int preserve_xattrs;
++#ifdef __MVS__
++extern int preserve_zos_tags;
++#endif
+ extern int xfer_flags_as_varint;
+ extern int need_messages_from_generator;
+ extern int delete_mode, delete_before, delete_during, delete_after;
+@@ -87,6 +90,9 @@ int xattr_sum_len = 0;
+ 
+ /* These index values are for the file-list's extra-attribute array. */
+ int pathname_ndx, depth_ndx, atimes_ndx, crtimes_ndx, uid_ndx, gid_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
++#ifdef __MVS__
++int zos_tags_ndx;
++#endif
+ 
+ int receiver_symlink_times = 0; /* receiver can set the time on a symlink */
+ int sender_symlink_iconv = 0;	/* sender should convert symlink content */
+@@ -592,6 +598,10 @@ void setup_protocol(int f_out,int f_in)
+ 		acls_ndx = ++file_extra_cnt;
+ 	if (preserve_xattrs)
+ 		xattrs_ndx = ++file_extra_cnt;
++#ifdef __MVS__
++	if (preserve_zos_tags)
++		zos_tags_ndx = (file_extra_cnt += 2); /* Need 2 slots: ccsid + txtflag */
++#endif
+ 
+ 	if (am_server)
+ 		set_allow_inc_recurse();
+diff --git a/flist.c b/flist.c
+index 1783253..66f5fc2 100644
+--- a/flist.c
++++ b/flist.c
+@@ -500,6 +500,13 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+ 	}
+ #endif
+ 
++#ifdef __MVS__
++	if (preserve_zos_tags && zos_tags_ndx && S_ISREG(mode)) {
++		if (F_ZOS_CCSID(file) || F_ZOS_TXTFLAG(file))
++			xflags |= XMIT_ZOS_TAGS;
++	}
++#endif
++
+ #ifdef SUPPORT_HARD_LINKS
+ 	if (tmp_dev != -1) {
+ 		if (protocol_version >= 30) {
+@@ -659,6 +666,13 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+ 	}
+ #endif
+ 
++#ifdef __MVS__
++	if (xflags & XMIT_ZOS_TAGS) {
++		write_varint(f, F_ZOS_CCSID(file));
++		write_varint(f, F_ZOS_TXTFLAG(file));
++	}
++#endif
++
+ 	if (always_checksum && (S_ISREG(mode) || protocol_version < 28)) {
+ 		const char *sum;
+ 		if (S_ISREG(mode))
+@@ -694,6 +708,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ 	static uid_t uid;
+ 	static gid_t gid;
+ 	static uint16 gid_flags;
++#ifdef __MVS__
++	static unsigned short zos_ccsid;
++	static unsigned int zos_txtflag;
++#endif
+ 	static char lastname[MAXPATHLEN], *lastdir;
+ 	static int lastdir_depth, lastdir_len = -1;
+ 	static unsigned int del_hier_name_len = 0;
+@@ -946,6 +964,21 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ #endif
+ 		linkname_len = 0;
+ 
++#ifdef __MVS__
++	/* Read z/OS tags if present, otherwise use defaults */
++	if (preserve_zos_tags && zos_tags_ndx && S_ISREG(mode)) {
++		if (xflags & XMIT_ZOS_TAGS) {
++			zos_ccsid = read_varint(f);
++			zos_txtflag = read_varint(f);
++		} else {
++			/* Linux -> z/OS: default to ISO8859-1 */
++			zos_ccsid = zos_default_ccsid;
++			zos_txtflag = 1;
++		}
++		extra_len += 2 * EXTRA_LEN;
++	}
++#endif
++
+ 	if (copy_devices && IS_DEVICE(mode)) {
+ 		/* This is impossible in the official release, but some pre-release patches
+ 		 * didn't convert the device into a file before sending, so we'll do it here
+@@ -1071,6 +1104,12 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ #endif
+ 	if (unsort_ndx)
+ 		F_NDX(file) = flist->used + flist->ndx_start;
++#ifdef __MVS__
++	if (zos_tags_ndx && S_ISREG(mode)) {
++		F_ZOS_CCSID(file) = zos_ccsid;
++		F_ZOS_TXTFLAG(file) = zos_txtflag;
++	}
++#endif
+ 
+ 	if (basename != thisname) {
+ 		file->dirname = lastdir;
+@@ -1482,6 +1521,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+ 	if (crtimes_ndx)
+ 		F_CRTIME(file) = get_create_time(fname, &st);
+ #endif
++#ifdef __MVS__
++	if (zos_tags_ndx && S_ISREG(st.st_mode)) {
++		F_ZOS_CCSID(file) = st.st_tag.ft_ccsid;
++		F_ZOS_TXTFLAG(file) = st.st_tag.ft_txtflag;
++	}
++#endif
+ 
+ 	if (basename != thisname)
+ 		file->dirname = lastdir;
+diff --git a/mkproto.awk b/mkproto.awk
+index bd2e927..49e4309 100644
+--- a/mkproto.awk
++++ b/mkproto.awk
+@@ -36,5 +36,5 @@ inheader {
+ 
+ END {
+     if (old_protos != protos) print protos > "proto.h"
+-    system("touch proto.h-tstamp")
++    system("touch proto.h-tstamp && chtag -tcISO8859-1 proto.h-tstamp")
+ }
+diff --git a/options.c b/options.c
+index 578507c..aa00a3c 100644
+--- a/options.c
++++ b/options.c
+@@ -57,6 +57,10 @@ int preserve_acls = 0;
+ int preserve_xattrs = 0;
+ int preserve_perms = 0;
+ int preserve_executability = 0;
++#ifdef __MVS__
++int preserve_zos_tags = 0;
++int zos_default_ccsid = 819; /* ISO8859-1/ASCII by default */
++#endif
+ int preserve_devices = 0;
+ int preserve_specials = 0;
+ int preserve_uid = 0;
+@@ -630,6 +634,11 @@ static struct poptOption long_options[] = {
+   {"xattrs",          'X', POPT_ARG_NONE,   0, 'X', 0, 0 },
+   {"no-xattrs",        0,  POPT_ARG_VAL,    &preserve_xattrs, 0, 0, 0 },
+   {"no-X",             0,  POPT_ARG_VAL,    &preserve_xattrs, 0, 0, 0 },
++#ifdef __MVS__
++  {"zos-tags",         0,  POPT_ARG_VAL,    &preserve_zos_tags, 1, 0, 0 },
++  {"no-zos-tags",      0,  POPT_ARG_VAL,    &preserve_zos_tags, 0, 0, 0 },
++  {"zos-default-ccsid",0,  POPT_ARG_INT,    &zos_default_ccsid, 0, 0, 0 },
++#endif
+   {"times",           't', POPT_ARG_VAL,    &preserve_mtimes, 1, 0, 0 },
+   {"no-times",         0,  POPT_ARG_VAL,    &preserve_mtimes, 0, 0, 0 },
+   {"no-t",             0,  POPT_ARG_VAL,    &preserve_mtimes, 0, 0, 0 },
+diff --git a/pipe.c b/pipe.c
+index 3e5f038..b6b962f 100644
+--- a/pipe.c
++++ b/pipe.c
+@@ -93,6 +93,12 @@ pid_t piped_child(char **command, int *f_in, int *f_out)
+ 	*f_in = from_child_pipe[0];
+ 	*f_out = to_child_pipe[1];
+ 
++#ifdef __MVS__
++  struct f_cnvrt cvtreq = {SETCVTON, 0, 1047};
++  fcntl(*f_in, F_CONTROL_CVT, &cvtreq);
++  fcntl(*f_out, F_CONTROL_CVT, &cvtreq);
++#endif
++
+ 	return pid;
+ }
+ 
+@@ -174,5 +180,11 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
+ 	*f_in = from_child_pipe[0];
+ 	*f_out = to_child_pipe[1];
+ 
++#ifdef __MVS__
++  struct f_cnvrt cvtreq = {SETCVTON, 0, 819};
++  fcntl(*f_in, F_CONTROL_CVT, &cvtreq);
++  fcntl(*f_out, F_CONTROL_CVT, &cvtreq);
++#endif
++
+ 	return pid;
+ }
+diff --git a/popt/findme.c b/popt/findme.c
+index 49fc9f6..83b7531 100644
+--- a/popt/findme.c
++++ b/popt/findme.c
+@@ -6,6 +6,7 @@
+    file accompanying popt source distributions, available from 
+    ftp://ftp.rpm.org/pub/rpm/dist. */
+ 
++#include <unistd.h>
+ #include "system.h"
+ #include "findme.h"
+ 
+diff --git a/rsync.c b/rsync.c
+index b130aba..b598f2a 100644
+--- a/rsync.c
++++ b/rsync.c
+@@ -26,11 +26,18 @@
+ #elif defined HAVE_LANGINFO_H && defined HAVE_NL_LANGINFO
+ #include <langinfo.h>
+ #endif
++#ifdef __MVS__
++#include <fcntl.h>
++#endif
+ 
+ extern int dry_run;
+ extern int preserve_acls;
+ extern int preserve_xattrs;
+ extern int preserve_perms;
++#ifdef __MVS__
++extern int preserve_zos_tags;
++extern int zos_tags_ndx;
++#endif
+ extern int preserve_executability;
+ extern int preserve_mtimes;
+ extern int omit_dir_times;
+@@ -669,6 +676,32 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+ 	}
+ #endif
+ 
++#ifdef __MVS__
++	if (preserve_zos_tags && zos_tags_ndx && S_ISREG(file->mode)) {
++		unsigned short ccsid = F_ZOS_CCSID(file);
++		unsigned int txtflag = F_ZOS_TXTFLAG(file);
++
++		/* Check if tags need to be updated */
++		if (ccsid != sxp->st.st_tag.ft_ccsid || txtflag != sxp->st.st_tag.ft_txtflag) {
++			attrib_t attr;
++			memset(&attr, 0, sizeof(attr));
++			attr.att_filetagchg = 1;
++			attr.att_filetag.ft_ccsid = ccsid;
++			attr.att_filetag.ft_txtflag = txtflag;
++
++			if (__chattr(fname, &attr, sizeof(attr)) == 0) {
++				updated |= UPDATED_MODE; /* Use existing flag for tracking */
++				if (DEBUG_GTE(OWN, 1)) {
++					rprintf(FINFO, "set z/OS tags on %s: ccsid=%u txtflag=%u\n",
++						fname, ccsid, txtflag);
++				}
++			} else {
++				rsyserr(FERROR_XFER, errno, "failed to set z/OS tags on %s", full_fname(fname));
++			}
++		}
++	}
++#endif
++
+ 	if (INFO_GTE(NAME, 2) && flags & ATTRS_REPORT) {
+ 		if (updated)
+ 			rprintf(FCLIENT, "%s\n", fname);
+diff --git a/rsync.h b/rsync.h
+index 479ac48..2ac634e 100644
+--- a/rsync.h
++++ b/rsync.h
+@@ -71,6 +71,7 @@
+ 
+ #define XMIT_RESERVED_16 (1<<16) 	/* reserved for future fileflags use */
+ #define XMIT_CRTIME_EQ_MTIME (1<<17)	/* any protocol - restricted by command-line option */
++#define XMIT_ZOS_TAGS (1<<18)		/* z/OS file tag attributes (CCSID, txtflag) */
+ 
+ /* These flags are used in the live flist data. */
+ 
+@@ -317,6 +318,8 @@ enum delret {
+ #include "config.h"
+ 
+ /* The default RSYNC_RSH is always set in config.h. */
++# include <sys/stat.h>
++#include <dirent.h>
+ 
+ #include <stdio.h>
+ #ifdef HAVE_SYS_TYPES_H
+@@ -444,6 +447,13 @@ enum delret {
+ #endif
+ #endif
+ 
++#ifdef HAVE_SYS_MODES_H
++/* apparently z/OS needs this for S_ISLNK */
++#ifndef S_ISLNK
++#include <sys/modes.h>
++#endif
++#endif
++
+ /* these are needed for the uid/gid mapping code */
+ #include <pwd.h>
+ #include <grp.h>
+@@ -459,6 +469,8 @@ enum delret {
+ #include <sys/file.h>
+ #endif
+ 
++#define HAVE_DIRENT_H 1
++
+ #ifdef HAVE_DIRENT_H
+ # include <dirent.h>
+ #else
+@@ -483,6 +495,13 @@ enum delret {
+ #include <sys/sysmacros.h>
+ #endif
+ 
++#ifdef __MVS__
++  /* z/OS has no 'makedev' so create trivial services */
++  #define makedev(devmajor,devminor) ((dev_t)((devmajor) << 24 | (devminor)))
++  #define minor(dev)                 ((dev) & 0xFFFFFF)
++  #define major(dev)                 (((uint32)(dev)) >> 24)
++#endif
++
+ #ifdef MAKEDEV_TAKES_3_ARGS
+ #define MAKEDEV(devmajor,devminor) makedev(0,devmajor,devminor)
+ #else
+@@ -821,6 +840,9 @@ extern int uid_ndx;
+ extern int gid_ndx;
+ extern int acls_ndx;
+ extern int xattrs_ndx;
++#ifdef __MVS__
++extern int zos_tags_ndx;
++#endif
+ extern int file_sum_extra_cnt;
+ 
+ #ifdef USE_FLEXIBLE_ARRAY
+@@ -877,6 +899,10 @@ extern int file_sum_extra_cnt;
+ #define F_ACL(f) REQ_EXTRA(f, acls_ndx)->num
+ #define F_XATTR(f) REQ_EXTRA(f, xattrs_ndx)->num
+ #define F_NDX(f) REQ_EXTRA(f, unsort_ndx)->num
++#ifdef __MVS__
++#define F_ZOS_CCSID(f) REQ_EXTRA(f, zos_tags_ndx)->unum
++#define F_ZOS_TXTFLAG(f) REQ_EXTRA(f, zos_tags_ndx + 1)->unum
++#endif
+ #define F_ATIME(f) REQ_EXTRA64(f, atimes_ndx)->num
+ #define F_CRTIME(f) REQ_EXTRA64(f, crtimes_ndx)->num
+ 
+@@ -1143,6 +1169,10 @@ typedef struct {
+ #ifdef SUPPORT_XATTRS
+     item_list *xattr;
+ #endif
++#ifdef __MVS__
++    unsigned short zos_ccsid;   /* z/OS Coded Character Set ID */
++    unsigned int zos_txtflag;   /* z/OS text flag */
++#endif
+ } stat_x;
+ 
+ #define ACL_READY(sx) ((sx).acc_acl != NULL)
+diff --git a/syscall.c b/syscall.c
+index 34a9bba..fdd96cb 100644
+--- a/syscall.c
++++ b/syscall.c
+@@ -81,6 +81,68 @@ struct create_time {
+ 
+ #define RETURN_ERROR_IF_RO_OR_LO RETURN_ERROR_IF(read_only || list_only, EROFS)
+ 
++#ifdef __MVS__
++#  define LINUX_S_IFIFO	      0010000	/* [XSI] named pipe (fifo) */
++#  define LINUX_S_IFCHR	      0020000	/* [XSI] character special */
++#  define LINUX_S_IFDIR	      0040000	/* [XSI] directory */
++#  define LINUX_S_IFBLK	      0060000   /* [XSI] block special */
++#  define LINUX_S_IFREG	      0100000   /* [XSI] regular */
++#  define LINUX_S_IFLNK	      0120000   /* [XSI] symbolic link */
++#  define LINUX_S_IFSOCK      0140000   /* [XSI] socket */
++
++#  define ZOS_S_IFIFO       0x04000000	/* named pipe (fifo) */
++#  define ZOS_S_IFCHR       0x02000000	/* character special */
++#  define ZOS_S_IFDIR       0x01000000	/* directory */
++#  define ZOS_S_IFBLK       0x06000000	/* block special */
++#  define ZOS_S_IFREG       0x03000000	/* regular */
++#  define ZOS_S_IFLNK       0x05000000	/* symbolic link */
++#  define ZOS_S_IFSOCK      0x07000000  /* socket */
++
++#  define ZOS_S_IFMT        0xFF000000  /* mask */
++
++/*
++ * z/OS has a 'mode_t' that is 32 bits in size, whereas
++ * Linux has a 'mode_t' that is 16 bits in size.
++ * The bottom 3 nibbles are the same, but z/OS uses
++ * the top word for the st_mode parts of mode and
++ * Linux uses the top nibble
++ */
++static inline mode_t 
++to_linux_mode(unsigned int inmode)
++{
++  mode_t outmode = (mode_t) (inmode & 0777);
++
++  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFIFO) { outmode |= LINUX_S_IFIFO; }
++  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFCHR) { outmode |= LINUX_S_IFCHR; }
++  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFDIR) { outmode |= LINUX_S_IFDIR; }
++  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFBLK) { outmode |= LINUX_S_IFBLK; }
++  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFREG) { outmode |= LINUX_S_IFREG; }
++  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFLNK) { outmode |= LINUX_S_IFLNK; }
++  if ((inmode & ZOS_S_IFMT) == ZOS_S_IFSOCK) { outmode |= LINUX_S_IFSOCK; }
++  return outmode;
++}
++
++static inline unsigned int
++to_zos_mode(mode_t inmode)
++{
++  unsigned int outmode = (unsigned int) (inmode & 0777);
++
++  if (inmode & LINUX_S_IFIFO) { outmode |= ZOS_S_IFIFO; }
++  if (inmode & LINUX_S_IFCHR) { outmode |= ZOS_S_IFCHR; }
++  if (inmode & LINUX_S_IFDIR) { outmode |= ZOS_S_IFDIR; }
++  if (inmode & LINUX_S_IFBLK) { outmode |= ZOS_S_IFBLK; }
++  if (inmode & LINUX_S_IFREG) { outmode |= ZOS_S_IFREG; }
++  if (inmode & LINUX_S_IFLNK) { outmode |= ZOS_S_IFLNK; }
++  if (inmode & LINUX_S_IFSOCK) { outmode |= ZOS_S_IFSOCK; }
++
++  return outmode;
++}
++
++#define to_native_mode(inmode) (to_zos_mode(inmode))
++#else
++#define to_native_mode(inmode) (inmode)
++#endif
++
+ int do_unlink(const char *path)
+ {
+ 	if (dry_run) return 0;
+@@ -167,7 +229,7 @@ int do_mknod(const char *pathname, mode_t mode, dev_t dev)
+ 
+ 	/* For --fake-super, we create a normal file with mode 0600. */
+ 	if (am_root < 0) {
+-		int fd = open(pathname, O_WRONLY|O_CREAT|O_TRUNC, S_IWUSR|S_IRUSR);
++		int fd = open(pathname, O_WRONLY|O_CREAT|O_TRUNC, to_native_mode(S_IWUSR|S_IRUSR));
+ 		if (fd < 0 || close(fd) < 0)
+ 			return -1;
+ 		return 0;
+@@ -175,7 +237,7 @@ int do_mknod(const char *pathname, mode_t mode, dev_t dev)
+ 
+ #if !defined MKNOD_CREATES_FIFOS && defined HAVE_MKFIFO
+ 	if (S_ISFIFO(mode))
+-		return mkfifo(pathname, mode);
++		return mkfifo(pathname, to_native_mode(mode));
+ #endif
+ #if !defined MKNOD_CREATES_SOCKETS && defined HAVE_SYS_UN_H
+ 	if (S_ISSOCK(mode)) {
+@@ -204,7 +266,7 @@ int do_mknod(const char *pathname, mode_t mode, dev_t dev)
+ 	}
+ #endif
+ #ifdef HAVE_MKNOD
+-	return mknod(pathname, mode, dev);
++	return mknod(pathname, to_native_mode(mode), dev);
+ #else
+ 	return -1;
+ #endif
+@@ -219,6 +281,7 @@ int do_rmdir(const char *pathname)
+ 
+ int do_open(const char *pathname, int flags, mode_t mode)
+ {
++  int fd;
+ 	if (flags != O_RDONLY) {
+ 		RETURN_ERROR_IF(dry_run, 0);
+ 		RETURN_ERROR_IF_RO_OR_LO;
+@@ -229,7 +292,8 @@ int do_open(const char *pathname, int flags, mode_t mode)
+ 		flags |= O_NOATIME;
+ #endif
+ 
+-	return open(pathname, flags | O_BINARY, mode);
++	fd = open(pathname, flags | O_BINARY, to_native_mode(mode));
++  return fd;
+ }
+ 
+ #ifdef HAVE_CHMOD
+@@ -244,7 +308,7 @@ int do_chmod(const char *path, mode_t mode)
+ 	switch (switch_step) {
+ #ifdef HAVE_LCHMOD
+ 	case 0:
+-		if ((code = lchmod(path, mode & CHMOD_BITS)) == 0)
++		if ((code = lchmod(path, to_native_mode(mode & CHMOD_BITS))) == 0)
+ 			break;
+ 		if (errno == ENOSYS)
+ 			switch_step++;
+@@ -256,7 +320,7 @@ int do_chmod(const char *path, mode_t mode)
+ 		if (S_ISLNK(mode)) {
+ # if defined HAVE_SETATTRLIST
+ 			struct attrlist attrList;
+-			uint32_t m = mode & CHMOD_BITS; /* manpage is wrong: not mode_t! */
++			uint32_t m = to_native_mode(mode & CHMOD_BITS); /* manpage is wrong: not mode_t! */
+ 
+ 			memset(&attrList, 0, sizeof attrList);
+ 			attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
+@@ -269,7 +333,7 @@ int do_chmod(const char *path, mode_t mode)
+ 			code = 1;
+ # endif
+ 		} else
+-			code = chmod(path, mode & CHMOD_BITS); /* DISCOURAGED FUNCTION */
++			code = chmod(path, to_native_mode(mode & CHMOD_BITS)); /* DISCOURAGED FUNCTION */
+ 		break;
+ 	}
+ 	if (code != 0 && (preserve_perms || preserve_executability))
+@@ -324,7 +388,7 @@ int do_mkdir(char *path, mode_t mode)
+ 	if (dry_run) return 0;
+ 	RETURN_ERROR_IF_RO_OR_LO;
+ 	trim_trailing_slashes(path);
+-	return mkdir(path, mode);
++	return mkdir(path, to_native_mode(mode));
+ }
+ 
+ /* like mkstemp but forces permissions */
+@@ -339,7 +403,7 @@ int do_mkstemp(char *template, mode_t perms)
+ 		int fd = mkstemp(template);
+ 		if (fd == -1)
+ 			return -1;
+-		if (fchmod(fd, perms) != 0 && preserve_perms) {
++		if (fchmod(fd, to_native_mode(perms)) != 0 && preserve_perms) {
+ 			int errno_save = errno;
+ 			close(fd);
+ 			unlink(template);
+@@ -347,7 +411,7 @@ int do_mkstemp(char *template, mode_t perms)
+ 			return -1;
+ 		}
+ #if defined HAVE_SETMODE && O_BINARY
+-		setmode(fd, O_BINARY);
++		setmode(fd, to_native_mode(O_BINARY));
+ #endif
+ 		return fd;
+ 	}
+@@ -358,6 +422,35 @@ int do_mkstemp(char *template, mode_t perms)
+ #endif
+ }
+ 
++#ifdef __MVS__
++int do_stat(const char *path, STRUCT_STAT *st)
++{
++        int rc = stat(path, st);
++        if (!rc) {
++             st->st_mode = to_linux_mode(st->st_mode);
++        }
++        return rc;
++}
++
++int do_lstat(const char *path, STRUCT_STAT *st)
++{
++        int rc = lstat(path, st);
++        if (!rc) {
++             st->st_mode = to_linux_mode(st->st_mode);
++        }
++        return rc;
++}
++
++int do_fstat(int fd, STRUCT_STAT *st)
++{
++        int rc = fstat(fd, st);
++        if (!rc) {
++             st->st_mode = to_linux_mode(st->st_mode);
++        }
++        return rc;
++}
++#else
++
+ int do_stat(const char *path, STRUCT_STAT *st)
+ {
+ #ifdef USE_STAT64_FUNCS
+@@ -389,6 +482,8 @@ int do_fstat(int fd, STRUCT_STAT *st)
+ #endif
+ }
+ 
++#endif
++
+ OFF_T do_lseek(int fd, OFF_T offset, int whence)
+ {
+ #ifdef HAVE_LSEEK64
