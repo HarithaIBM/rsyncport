@@ -21,7 +21,7 @@ index 7c75c26..6413224 100644
  T_UNSAFE_OBJ = t_unsafe.o syscall.o util1.o util2.o t_stub.o lib/compat.o lib/snprintf.o lib/wildmatch.o
  t_unsafe$(EXEEXT): $(T_UNSAFE_OBJ)
 diff --git a/compat.c b/compat.c
-index 4ce8c6d..f0b40fc 100644
+index 4ce8c6d..24b30df 100644
 --- a/compat.c
 +++ b/compat.c
 @@ -47,6 +47,9 @@ extern int preserve_atimes;
@@ -34,7 +34,15 @@ index 4ce8c6d..f0b40fc 100644
  extern int xfer_flags_as_varint;
  extern int need_messages_from_generator;
  extern int delete_mode, delete_before, delete_during, delete_after;
-@@ -87,6 +90,9 @@ int xattr_sum_len = 0;
+@@ -54,6 +57,7 @@ extern int do_compression;
+ extern int do_compression_level;
+ extern int saw_stderr_opt;
+ extern int msgs2stderr;
++extern int verbose;
+ extern char *shell_cmd;
+ extern char *partial_dir;
+ extern char *files_from;
+@@ -87,6 +91,9 @@ int xattr_sum_len = 0;
  
  /* These index values are for the file-list's extra-attribute array. */
  int pathname_ndx, depth_ndx, atimes_ndx, crtimes_ndx, uid_ndx, gid_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
@@ -44,7 +52,16 @@ index 4ce8c6d..f0b40fc 100644
  
  int receiver_symlink_times = 0; /* receiver can set the time on a symlink */
  int sender_symlink_iconv = 0;	/* sender should convert symlink content */
-@@ -592,6 +598,10 @@ void setup_protocol(int f_out,int f_in)
+@@ -122,7 +129,7 @@ struct name_num_obj valid_compressions = {
+ #define CF_CHKSUM_SEED_FIX (1<<5)
+ #define CF_INPLACE_PARTIAL_DIR (1<<6)
+ #define CF_VARINT_FLIST_FLAGS (1<<7)
+-#define CF_ID0_NAMES (1<<8)
++
+ 
+ static const char *client_info;
+ 
+@@ -592,6 +599,10 @@ void setup_protocol(int f_out,int f_in)
  		acls_ndx = ++file_extra_cnt;
  	if (preserve_xattrs)
  		xattrs_ndx = ++file_extra_cnt;
@@ -55,22 +72,22 @@ index 4ce8c6d..f0b40fc 100644
  
  	if (am_server)
  		set_allow_inc_recurse();
-@@ -599,8 +609,13 @@ void setup_protocol(int f_out,int f_in)
+@@ -599,8 +610,13 @@ void setup_protocol(int f_out,int f_in)
  	if (remote_protocol == 0) {
  		if (am_server && !local_server)
  			check_sub_protocol();
 -		if (!read_batch)
 +		if (!read_batch) {
 +#ifdef __MVS__
-+			write_int(f_out, protocol_version);
-+#else
  			write_int(f_out, protocol_version);
++#else
++			write_int(f_out, protocol_version);
 +#endif
 +		}
  		remote_protocol = read_int(f_in);
  		if (protocol_version > remote_protocol)
  			protocol_version = remote_protocol;
-@@ -726,6 +741,10 @@ void setup_protocol(int f_out,int f_in)
+@@ -726,6 +742,10 @@ void setup_protocol(int f_out,int f_in)
  				compat_flags |= CF_INPLACE_PARTIAL_DIR;
  			if (strchr(client_info, 'u') != NULL)
  				compat_flags |= CF_ID0_NAMES;
@@ -81,7 +98,7 @@ index 4ce8c6d..f0b40fc 100644
  			if (strchr(client_info, 'v') != NULL) {
  				do_negotiated_strings = 1;
  				compat_flags |= CF_VARINT_FLIST_FLAGS;
-@@ -805,6 +824,49 @@ void setup_protocol(int f_out,int f_in)
+@@ -805,6 +825,49 @@ void setup_protocol(int f_out,int f_in)
  	}
  #endif
  
