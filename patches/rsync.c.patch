@@ -1,0 +1,91 @@
+diff --git a/rsync.c b/rsync.c
+index b130aba..532d677 100644
+--- a/rsync.c
++++ b/rsync.c
+@@ -26,11 +26,18 @@
+ #elif defined HAVE_LANGINFO_H && defined HAVE_NL_LANGINFO
+ #include <langinfo.h>
+ #endif
++#ifdef __MVS__
++#include <fcntl.h>
++#endif
+ 
+ extern int dry_run;
+ extern int preserve_acls;
+ extern int preserve_xattrs;
+ extern int preserve_perms;
++#ifdef __MVS__
++extern int preserve_zos_tags;
++extern int zos_tags_ndx;
++#endif
+ extern int preserve_executability;
+ extern int preserve_mtimes;
+ extern int omit_dir_times;
+@@ -669,12 +676,54 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+ 	}
+ #endif
+ 
++#ifdef __MVS__
++	if (preserve_zos_tags && zos_tags_ndx && S_ISREG(file->mode)) {
++		unsigned short ccsid = F_ZOS_CCSID(file);
++		unsigned int txtflag = F_ZOS_TXTFLAG(file);
++
++		/* Check if tags need to be updated */
++		if (ccsid != sxp->st.st_tag.ft_ccsid || txtflag != sxp->st.st_tag.ft_txtflag) {
++			attrib_t attr;
++			memset(&attr, 0, sizeof(attr));
++			attr.att_filetagchg = 1;
++			attr.att_filetag.ft_ccsid = ccsid;
++			attr.att_filetag.ft_txtflag = txtflag;
++
++			if (__chattr(fname, &attr, sizeof(attr)) == 0) {
++				updated |= UPDATED_MODE; /* Use existing flag for tracking */
++				if (DEBUG_GTE(OWN, 1)) {
++					rprintf(FINFO, "set z/OS tags on %s: ccsid=%u txtflag=%u\n",
++						fname, ccsid, txtflag);
++				}
++			} else {
++				rsyserr(FERROR_XFER, errno, "failed to set z/OS tags on %s", full_fname(fname));
++			}
++		}
++	}
++#endif
++
+ 	if (INFO_GTE(NAME, 2) && flags & ATTRS_REPORT) {
+ 		if (updated)
+ 			rprintf(FCLIENT, "%s\n", fname);
+ 		else
+ 			rprintf(FCLIENT, "%s is uptodate\n", fname);
+ 	}
++
++#ifdef __MVS__
++	/* Set z/OS file tags if enabled and file is regular */
++	if (zos_tags_ndx && S_ISREG(new_mode)) {
++		attrib_t attr;
++		memset(&attr, 0, sizeof(attr));
++		attr.att_filetagchg = 1;
++		attr.att_filetag.ft_ccsid = F_ZOS_CCSID(file);
++		attr.att_filetag.ft_txtflag = F_ZOS_TXTFLAG(file);
++
++		if (__chattr(fname, &attr, sizeof(attr)) != 0) {
++			rsyserr(FERROR_XFER, errno, "failed to set file tags on %s", full_fname(fname));
++		}
++	}
++#endif
++
+   cleanup:
+ 	if (sxp == &sx2)
+ 		free_stat_x(&sx2);
+@@ -820,6 +869,7 @@ struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
+ 	return NULL;
+ }
+ 
++#ifndef NO_WHO_AM_I
+ const char *who_am_i(void)
+ {
+ 	if (am_starting_up)
+@@ -829,3 +879,4 @@ const char *who_am_i(void)
+ 	     : am_receiver ? "receiver"
+ 	     : "Receiver"; /* pre-forked receiver */
+ }
++#endif
